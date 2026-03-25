@@ -1,0 +1,30 @@
+package com.joao.Alertify.config;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.web.reactive.function.client.WebClient;
+
+@Configuration
+public class WebClientConfig {
+
+    @Bean("newsApiWebClient")
+    public WebClient newsApiWebClient(
+            @Value("${app.news-api.base-url}") String baseUrl) {
+        return WebClient.builder()
+                .baseUrl(baseUrl)
+                .defaultHeader("Accept", "application/json")
+                .build();
+    }
+
+    @Bean("telegramWebClient")
+    public WebClient telegramWebClient(
+            @Value("${app.telegram.api-url}") String telegramApiUrl,
+            @Value("${app.telegram.bot-token}") String botToken) {
+        return WebClient.builder()
+                .baseUrl(telegramApiUrl + botToken)
+                .defaultHeader("Content-Type", "application/json")
+                .build();
+    }
+}
+
