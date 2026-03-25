@@ -20,6 +20,9 @@ run-mvn.cmd
 mvn-out.txt
 mvn-err.txt
 
+### Secrets ###
+.env
+
 ### IntelliJ IDEA ###
 .idea
 *.iws
