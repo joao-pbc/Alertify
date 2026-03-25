@@ -11,57 +11,91 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * Adapter — translates the external Stock/News API contract into domain objects,
+ * Adapter — translates the external Massive Stock API contract into domain objects,
  * isolating the rest of the application from third-party API changes.
+ *
+ * Endpoint used: GET /v3/reference/tickers
  */
 @Slf4j
 @Component
 public class StockApiClient {
 
-    private final WebClient webClient;
-    private final String apiKey;
+    private static final String TICKERS_PATH = "/v3/reference/tickers";
+    private static final int DEFAULT_LIMIT = 100;
+
+    private final WebClient stockWebClient;
+    private final WebClient newsWebClient;
+    private final String newsApiKey;
 
     public StockApiClient(
-            @Qualifier("newsApiWebClient") WebClient webClient,
-            @Value("${app.news-api.key}") String apiKey) {
-        this.webClient = webClient;
-        this.apiKey = apiKey;
+            @Qualifier("stockApiWebClient") WebClient stockWebClient,
+            @Qualifier("newsApiWebClient") WebClient newsWebClient,
+            @Value("${app.news-api.key}") String newsApiKey) {
+        this.stockWebClient = stockWebClient;
+        this.newsWebClient = newsWebClient;
+        this.newsApiKey = newsApiKey;
     }
 
+    // ── Stock API (Massive) ──────────────────────────────────────────────────
+
     /**
-     * Search for stocks by query — adapts external DTO → domain model.
+     * Retrieves all active tickers from the Massive API.
+     * Maps: GET /v3/reference/tickers?active=true&limit=100
      */
-    public List<Stock> searchStocks(String query) {
+    public List<Stock> fetchAllStocks() {
         try {
-            List<StockApiResponse> responses = webClient.get()
+            MassiveTickerResponse response = stockWebClient.get()
                     .uri(uriBuilder -> uriBuilder
-                            .path("/everything")
-                            .queryParam("q", query)
-                            .queryParam("apiKey", apiKey)
-                            .queryParam("pageSize", "5")
+                            .path(TICKERS_PATH)
+                            .queryParam("active", "true")
+                            .queryParam("limit", DEFAULT_LIMIT)
                             .build())
                     .retrieve()
-                    .bodyToFlux(StockApiResponse.class)
-                    .collectList()
+                    .bodyToMono(MassiveTickerResponse.class)
                     .block();
 
-            return adapt(responses == null ? Collections.emptyList() : responses);
+            return adaptFromMassive(response);
         } catch (Exception e) {
-            log.warn("Erro ao consultar API externa para query '{}': {}", query, e.getMessage());
+            log.warn("Erro ao listar todos os tickers da Massive API: {}", e.getMessage());
             return Collections.emptyList();
         }
     }
+
+    /**
+     * Searches tickers by exact ticker symbol using the Massive API.
+     * Maps: GET /v3/reference/tickers?ticker={ticker}&active=true
+     */
+    public List<Stock> searchByTicker(String ticker) {
+        try {
+            MassiveTickerResponse response = stockWebClient.get()
+                    .uri(uriBuilder -> uriBuilder
+                            .path(TICKERS_PATH)
+                            .queryParam("ticker", ticker.toUpperCase())
+                            .queryParam("active", "true")
+                            .build())
+                    .retrieve()
+                    .bodyToMono(MassiveTickerResponse.class)
+                    .block();
+
+            return adaptFromMassive(response);
+        } catch (Exception e) {
+            log.warn("Erro ao buscar ticker '{}' na Massive API: {}", ticker, e.getMessage());
+            return Collections.emptyList();
+        }
+    }
+
+    // ── News API ─────────────────────────────────────────────────────────────
 
     /**
      * Fetch latest news headlines for a given stock ticker.
      */
     public List<NewsApiArticle> fetchHeadlines(Stock stock) {
         try {
-            NewsApiResponse response = webClient.get()
+            NewsApiResponse response = newsWebClient.get()
                     .uri(uriBuilder -> uriBuilder
                             .path("/everything")
                             .queryParam("q", stock.getTicker())
-                            .queryParam("apiKey", apiKey)
+                            .queryParam("apiKey", newsApiKey)
                             .queryParam("pageSize", "5")
                             .queryParam("language", "pt,en")
                             .queryParam("sortBy", "publishedAt")
@@ -79,15 +113,18 @@ public class StockApiClient {
         }
     }
 
-    // Adapter: converts external DTO → domain Stock (without persisting)
-    private List<Stock> adapt(List<StockApiResponse> responses) {
-        return responses.stream()
+    // ── Adapter (external DTO → domain model) ────────────────────────────────
+
+    private List<Stock> adaptFromMassive(MassiveTickerResponse response) {
+        if (response == null || response.results() == null) {
+            return Collections.emptyList();
+        }
+        return response.results().stream()
                 .map(r -> Stock.builder()
                         .ticker(r.ticker() != null ? r.ticker() : "N/A")
                         .name(r.name())
-                        .exchange(r.exchange())
+                        .exchange(r.primaryExchange())
                         .build())
                 .toList();
     }
 }
-

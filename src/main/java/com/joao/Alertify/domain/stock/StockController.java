@@ -18,13 +18,26 @@ public class StockController {
 
     private final StockService stockService;
 
-    @GetMapping("/search")
-    public ResponseEntity<ApiResponse<List<StockDTO>>> search(@RequestParam String query) {
-        return ResponseEntity.ok(ApiResponse.ok(stockService.search(query)));
+    /**
+     * Returns all active tickers from the external Stock API (Massive).
+     * GET /stocks/all
+     */
+    @GetMapping("/all")
+    public ResponseEntity<ApiResponse<List<StockDTO>>> fetchAll() {
+        return ResponseEntity.ok(ApiResponse.ok(stockService.fetchAll()));
+    }
+
+    /**
+     * Searches tickers by exact ticker symbol in the external Stock API.
+     * GET /stocks/ticker?symbol=AAPL
+     */
+    @GetMapping("/ticker")
+    public ResponseEntity<ApiResponse<List<StockDTO>>> searchByTicker(@RequestParam String symbol) {
+        return ResponseEntity.ok(ApiResponse.ok(stockService.searchByTicker(symbol)));
     }
 
     @GetMapping
-    public ResponseEntity<ApiResponse<List<StockDTO>>> list(@AuthenticationPrincipal User user) {
+    public ResponseEntity<ApiResponse<List<StockDTO>>> listByUser(@AuthenticationPrincipal User user) {
         return ResponseEntity.ok(ApiResponse.ok(stockService.findAllByUser(user)));
     }
 

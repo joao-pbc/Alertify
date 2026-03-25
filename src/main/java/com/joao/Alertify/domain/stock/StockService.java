@@ -22,10 +22,23 @@ public class StockService {
 
     // ── Search external API ──────────────────────────────────────────────────
 
-    public List<StockDTO> search(String query) {
-        return stockApiClient.searchStocks(query)
+    /**
+     * Returns all active tickers from the external Stock API.
+     */
+    public List<StockDTO> fetchAll() {
+        return stockApiClient.fetchAllStocks()
                 .stream()
-                .map(StockDTO::from)
+                .map(StockDTO::fromExternal)
+                .toList();
+    }
+
+    /**
+     * Searches tickers by exact ticker symbol in the external Stock API.
+     */
+    public List<StockDTO> searchByTicker(String ticker) {
+        return stockApiClient.searchByTicker(ticker)
+                .stream()
+                .map(StockDTO::fromExternal)
                 .toList();
     }
 

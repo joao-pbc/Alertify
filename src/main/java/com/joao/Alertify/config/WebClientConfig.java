@@ -17,6 +17,17 @@ public class WebClientConfig {
                 .build();
     }
 
+    @Bean("stockApiWebClient")
+    public WebClient stockApiWebClient(
+            @Value("${app.stock-api.base-url}") String baseUrl,
+            @Value("${app.stock-api.token}") String token) {
+        return WebClient.builder()
+                .baseUrl(baseUrl)
+                .defaultHeader("Accept", "application/json")
+                .defaultHeader("Authorization", "Bearer " + token)
+                .build();
+    }
+
     @Bean("telegramWebClient")
     public WebClient telegramWebClient(
             @Value("${app.telegram.api-url}") String telegramApiUrl,
