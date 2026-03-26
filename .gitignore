@@ -13,7 +13,6 @@ target/
 .springBeans
 .sts4-cache
 .gitattributes
-arquitetura-investment-app.pdf
 
 ### Scripts temporários ###
 run-mvn.cmd
