@@ -29,7 +29,7 @@ public class NewsFetcherJob {
 
     @Scheduled(fixedDelayString = "${app.scheduler.interval-ms:300000}")
     public void run() {
-        List<Stock> activeStocks = stockRepository.findByActiveTrue();
+        List<Stock> activeStocks = stockRepository.findByActiveTrueWithUser();
         log.info("Scheduler executando — {} ações ativas monitoradas", activeStocks.size());
         activeStocks.forEach(this::checkNews);
     }
@@ -61,9 +61,9 @@ public class NewsFetcherJob {
     private boolean isNew(Stock stock, NewsApiArticle article) {
         return article.url() != null
                 && !article.url().isBlank()
-                && !newsService.findByStock(stock)
+                && newsService.findByStock(stock)
                 .stream()
-                .anyMatch(n -> n.getUrl().equals(article.url()));
+                .noneMatch(n -> n.getUrl().equals(article.url()));
     }
 }
 
