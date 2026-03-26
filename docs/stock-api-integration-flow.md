@@ -1,194 +1,150 @@
-# 📈 Alertify — Fluxo de Integração com a Stock API (Massive)
+# Stock & News API Integration Flow — Massive API
 
 ## Visão Geral
 
-Este documento descreve o fluxo de implementação da integração com a **Massive Stock API** para listagem e pesquisa de tickers no Alertify.
+Este documento descreve o fluxo de integração com a **Massive API** para busca de stocks (tickers) e notícias financeiras.
 
 ---
 
-## 🗂️ Arquivos Modificados / Criados
-
-| Arquivo | Tipo | Ação |
-|---|---|---|
-| `application.properties` | Config | Adicionadas propriedades `app.stock-api.base-url` e `app.stock-api.token` |
-| `WebClientConfig.java` | Config | Novo bean `stockApiWebClient` com autenticação Bearer |
-| `MassiveTickerResponse.java` | DTO externo | **Criado** — mapeia JSON da Massive API (`results[]`, `count`, `status`) |
-| `StockApiClient.java` | Adapter | Refatorado — usa `stockWebClient` com 3 métodos: `fetchAllStocks`, `searchByTicker`, `searchStocks` |
-| `StockDTO.java` | DTO de domínio | Adicionado `fromExternal()` para stocks sem persistência |
-| `StockService.java` | Service | Adicionados `fetchAll()` e `searchByTicker()` |
-| `StockController.java` | Controller | Adicionados endpoints `GET /stocks/all` e `GET /stocks/ticker?symbol=` |
-
----
-
-## 🔄 Fluxo Completo (por camada)
+## Arquitetura
 
 ```
 HTTP Request
-     │
-     ▼
-┌─────────────────────────────────────────────────┐
-│              StockController                    │
-│                                                 │
-│  GET /stocks/all          → fetchAll()          │
-│  GET /stocks/ticker?symbol → searchByTicker()   │
-│  GET /stocks/search?query  → search()           │
-└────────────────────┬────────────────────────────┘
-                     │ delega para
-                     ▼
-┌─────────────────────────────────────────────────┐
-│              StockService (Facade)              │
-│                                                 │
-│  fetchAll()        → stockApiClient.fetchAllStocks()   │
-│  searchByTicker()  → stockApiClient.searchByTicker()   │
-│  search()          → stockApiClient.searchStocks()     │
-│                                                 │
-│  Mapeia: Stock → StockDTO.fromExternal()        │
-└────────────────────┬────────────────────────────┘
-                     │ delega para
-                     ▼
-┌─────────────────────────────────────────────────┐
-│           StockApiClient (Adapter)              │
-│                                                 │
-│  Realiza GET /v3/reference/tickers via WebClient│
-│  Deserializa → MassiveTickerResponse            │
-│  Adapta:  TickerResult → Stock (domínio)        │
-└────────────────────┬────────────────────────────┘
-                     │ HTTP via
-                     ▼
-┌─────────────────────────────────────────────────┐
-│        stockApiWebClient (WebClient Bean)       │
-│                                                 │
-│  Base URL: https://api.massive.com              │
-│  Header:   Authorization: Bearer <STOCK_TOKEN>  │
-│  Header:   Accept: application/json             │
-└────────────────────┬────────────────────────────┘
-                     │
-                     ▼
-          Massive Stock API externa
+    │
+    ▼
+StockController          StockApiClient (Adapter)
+    │                         │
+    │  fetchAllStocks()        │── GET /v3/reference/tickers?active=true&limit=100
+    │  searchByTicker(ticker)  │── GET /v3/reference/tickers?ticker={TICKER}&active=true
+    │                         │
+    └─── StockService ────────►│
+                               │
+NewsFetcherJob (Scheduler)     │
+    │                          │
+    │  fetchHeadlines(stock)   │── GET /v2/reference/news?ticker={TICKER}
+    │                          │       &sort=published_utc
+    └─────────────────────────►│       &order=desc
+                               │       &limit=5
 ```
 
 ---
 
-## 📡 Endpoints Disponíveis
+## Fluxo de Implementação
 
-### `GET /stocks/all`
-Retorna todos os tickers ativos cadastrados na Massive API.
+### 1. Busca de Tickers (`/v3/reference/tickers`)
 
-**Query Params internos (Massive):** `active=true&limit=100`
+#### `fetchAllStocks()`
+- **Endpoint:** `GET /v3/reference/tickers?active=true&limit=100`
+- **Auth:** `Bearer token` via header `Authorization` (configurado no `WebClientConfig`)
+- **Response DTO:** `MassiveTickerResponse` → `List<TickerResult>`
+- **Adapter:** `adaptFromMassive()` → mapeia `ticker`, `name`, `primary_exchange` para `Stock`
 
-**Exemplo de resposta:**
+#### `searchByTicker(String ticker)`
+- **Endpoint:** `GET /v3/reference/tickers?ticker={TICKER}&active=true`
+- **Nota:** o ticker é sempre enviado em **uppercase**
+- **Response DTO:** `MassiveTickerResponse`
+- **Adapter:** mesmo `adaptFromMassive()` acima
+
+---
+
+### 2. Busca de Notícias (`/v2/reference/news`)
+
+#### `fetchHeadlines(Stock stock)`
+- **Endpoint:** `GET /v2/reference/news?ticker={TICKER}&sort=published_utc&order=desc&limit=5`
+- **Auth:** mesmo `Bearer token` do `stockApiWebClient`
+- **Parâmetros:**
+
+| Parâmetro | Valor           | Descrição                              |
+|-----------|-----------------|----------------------------------------|
+| `ticker`  | ex: `AAPL`      | Filtra artigos pelo símbolo do ticker  |
+| `sort`    | `published_utc` | Campo de ordenação                     |
+| `order`   | `desc`          | Mais recentes primeiro                 |
+| `limit`   | `5`             | Máximo de artigos retornados           |
+
+- **Response DTO:** `MassiveNewsResponse` → `List<NewsResult>`
+- **Adapter:** `adaptFromMassiveNews()` → mapeia para `NewsApiArticle`
+
+---
+
+## DTOs Envolvidos
+
+### `MassiveNewsResponse`
+Mapeia o envelope JSON da Massive News API:
 ```json
 {
+  "count": 1,
+  "next_url": "...",
+  "request_id": "...",
   "status": "OK",
-  "data": [
+  "results": [
     {
-      "id": null,
-      "ticker": "AAPL",
-      "name": "Apple Inc.",
-      "exchange": "XNAS",
-      "active": true,
-      "createdAt": null
+      "id": "...",
+      "title": "...",
+      "description": "...",
+      "article_url": "...",
+      "published_utc": "2024-06-24T18:33:53Z",
+      "publisher": { "name": "Investing.com", ... },
+      "tickers": ["UBS"],
+      "insights": [{ "ticker": "UBS", "sentiment": "positive", "sentiment_reasoning": "..." }]
     }
   ]
 }
 ```
 
----
-
-### `GET /stocks/ticker?symbol=AAPL`
-Busca um ticker exato na Massive API.
-
-**Query Params internos (Massive):** `ticker=AAPL&active=true`
-
-**Exemplo de resposta:**
-```json
-{
-  "status": "OK",
-  "data": [
-    {
-      "id": null,
-      "ticker": "AAPL",
-      "name": "Apple Inc.",
-      "exchange": "XNAS",
-      "active": true,
-      "createdAt": null
-    }
-  ]
-}
+### `NewsApiArticle`
+DTO de saída do adapter (domínio interno):
+```java
+record NewsApiArticle(
+    String title,
+    String description,
+    String url,           // ← article_url da Massive
+    String publishedAt,   // ← published_utc da Massive
+    String publisher,     // ← publisher.name da Massive
+    List<String> tickers,
+    String sentiment      // ← insights[0].sentiment (se houver)
+)
 ```
 
 ---
 
-### `GET /stocks/search?query=apple`
-Busca tickers por texto livre (nome ou símbolo).
+## Fluxo do Scheduler (`NewsFetcherJob`)
 
-**Query Params internos (Massive):** `search=apple&active=true&limit=20`
-
----
-
-## 🏗️ Decisões de Design
-
-### 1. Padrão Adapter (`StockApiClient`)
-O `StockApiClient` é o único ponto de contato com a API externa. Toda a tradução do contrato externo (`MassiveTickerResponse`) para o modelo de domínio (`Stock`) acontece **dentro do adapter**, via o método privado `adaptFromMassive()`. O resto da aplicação nunca conhece a estrutura JSON da Massive.
-
-### 2. Separação de DTOs
-| DTO | Propósito |
-|---|---|
-| `MassiveTickerResponse` | Mapeia o JSON bruto da API (`@JsonIgnoreProperties(ignoreUnknown = true)`) |
-| `Stock` (domínio) | Modelo de domínio — pode ou não estar persistido |
-| `StockDTO` | Resposta da API REST do Alertify (contrato de saída) |
-
-### 3. `StockDTO.fromExternal()` vs `StockDTO.from()`
-- `from(Stock)` → para stocks **persistidos** (com `id`, `user`, `createdAt`)
-- `fromExternal(Stock)` → para stocks **transientes** vindos da API externa (`id=null`, `createdAt=null`)
-
-### 4. WebClient por responsabilidade
-Dois beans distintos evitam acoplamento de configuração:
-- `stockApiWebClient` → Massive API (Bearer token, base URL própria)
-- `newsApiWebClient` → NewsAPI (API Key por query param, base URL própria)
-
-### 5. Autenticação Bearer via Header padrão
-O token `STOCK_TOKEN` é lido do `.env` e injetado no `WebClient` como `defaultHeader("Authorization", "Bearer ...")`. Isso garante que **todas as requisições** ao client já estejam autenticadas sem repetir o header em cada chamada.
-
-### 6. Tratamento de erros no Adapter
-Cada método do `StockApiClient` possui um `try/catch` com `log.warn`. Em caso de falha (timeout, 4xx, 5xx), retorna `Collections.emptyList()` sem propagar exceção para o controller — garantindo resiliência.
-
----
-
-## ⚙️ Configuração necessária no `.env`
-
-```dotenv
-STOCK_TOKEN=seu_token_aqui
 ```
-
-E em `application.properties`:
-```properties
-app.stock-api.base-url=https://api.massive.com
-app.stock-api.token=${STOCK_TOKEN}
+@Scheduled (every 5 min)
+    │
+    ├── stockRepository.findByActiveTrue()
+    │       └── Para cada Stock ativo:
+    │
+    ├── StockApiClient.fetchHeadlines(stock)
+    │       └── GET /v2/reference/news?ticker={ticker}&sort=published_utc&order=desc&limit=5
+    │
+    ├── Para cada NewsApiArticle retornado:
+    │       ├── isNew? (verifica se URL já existe no banco)
+    │       └── NewsService.processNews(...)
+    │               ├── Persiste News no banco
+    │               └── Publica NewsDetectedEvent
+    │                       └── NotificationEventListener → TelegramNotifier
 ```
 
 ---
 
-## 🔑 Mapeamento JSON → Domínio
+## Autenticação
 
-| Campo Massive API (`TickerResult`) | Campo domínio (`Stock`) |
-|---|---|
-| `ticker` | `ticker` |
-| `name` | `name` |
-| `primary_exchange` | `exchange` |
-| *(não mapeado)* | `active = true` (padrão) |
-| *(não mapeado)* | `id = null` (não persistido) |
-| *(não mapeado)* | `user = null` (não persistido) |
+| Cliente WebClient   | Tipo de Auth             | Configuração                           |
+|---------------------|--------------------------|----------------------------------------|
+| `stockApiWebClient` | `Bearer {STOCK_TOKEN}`   | `app.stock-api.token` (env var)        |
+| `newsApiWebClient`  | ~~`apiKey` query param~~ | **Removido** — news agora via Massive  |
+
+> **Nota:** com a migração para a Massive News API, **não há mais um WebClient separado para news**.
+> Tanto tickers quanto notícias são servidos pelo mesmo `stockApiWebClient`, autenticado via `Bearer token`.
+> A chave `app.news-api.key` e o bean `newsApiWebClient` não são mais utilizados pelo `StockApiClient`.
 
 ---
 
-## ✅ Critério de Aceitação
+## Arquivos Modificados / Criados
 
-| Critério | Status |
-|---|---|
-| Fazer requisição para a API Massive via WebClient autenticado | ✅ |
-| Tratar o JSON de resposta no adapter (`MassiveTickerResponse`) | ✅ |
-| Retornar lista de stocks via `GET /stocks/all` | ✅ |
-| Pesquisar por ticker exato via `GET /stocks/ticker?symbol=` | ✅ |
-| Isolar contrato externo do domínio via Adapter pattern | ✅ |
-
+| Arquivo                                          | Ação           | Descrição                                                                         |
+|--------------------------------------------------|----------------|-----------------------------------------------------------------------------------|
+| `infra/external/MassiveNewsResponse.java`        | ✅ Criado       | DTO mapeando o envelope `/v2/reference/news`                                      |
+| `infra/external/NewsApiArticle.java`             | ✏️ Atualizado  | Campos alinhados com a Massive (`publisher` como `String`, `tickers`, `sentiment`)|
+| `infra/external/StockApiClient.java`             | ✏️ Atualizado  | `fetchHeadlines()` usa `stockWebClient` com Massive News API (`ticker`, `sort`, `order`, `limit`) |

@@ -32,8 +32,11 @@ public class WebClientConfig {
     public WebClient telegramWebClient(
             @Value("${app.telegram.api-url}") String telegramApiUrl,
             @Value("${app.telegram.bot-token}") String botToken) {
+        // URL final: https://api.telegram.org/bot{TOKEN}
+        // Chamadas usam o sufixo /sendMessage, /getMe, etc.
+        String baseUrl = telegramApiUrl + botToken;
         return WebClient.builder()
-                .baseUrl(telegramApiUrl + botToken)
+                .baseUrl(baseUrl)
                 .defaultHeader("Content-Type", "application/json")
                 .build();
     }

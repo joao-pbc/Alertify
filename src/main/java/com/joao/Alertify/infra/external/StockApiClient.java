@@ -3,7 +3,6 @@ package com.joao.Alertify.infra.external;
 import com.joao.Alertify.domain.stock.Stock;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 
@@ -14,26 +13,26 @@ import java.util.List;
  * Adapter — translates the external Massive Stock API contract into domain objects,
  * isolating the rest of the application from third-party API changes.
  *
- * Endpoint used: GET /v3/reference/tickers
+ * Endpoints used:
+ *   GET /v3/reference/tickers  → stock reference data
+ *   GET /v2/reference/news     → news articles per ticker
  */
 @Slf4j
 @Component
 public class StockApiClient {
 
     private static final String TICKERS_PATH = "/v3/reference/tickers";
-    private static final int DEFAULT_LIMIT = 100;
+    private static final String NEWS_PATH     = "/v2/reference/news";
+    private static final int    DEFAULT_LIMIT = 100;
+    private static final int    NEWS_LIMIT    = 5;
+    private static final String DEFAULT_SORT  = "published_utc";
+    private static final String DEFAULT_ORDER = "desc";
 
     private final WebClient stockWebClient;
-    private final WebClient newsWebClient;
-    private final String newsApiKey;
 
     public StockApiClient(
-            @Qualifier("stockApiWebClient") WebClient stockWebClient,
-            @Qualifier("newsApiWebClient") WebClient newsWebClient,
-            @Value("${app.news-api.key}") String newsApiKey) {
+            @Qualifier("stockApiWebClient") WebClient stockWebClient) {
         this.stockWebClient = stockWebClient;
-        this.newsWebClient = newsWebClient;
-        this.newsApiKey = newsApiKey;
     }
 
     // ── Stock API (Massive) ──────────────────────────────────────────────────
@@ -84,36 +83,37 @@ public class StockApiClient {
         }
     }
 
-    // ── News API ─────────────────────────────────────────────────────────────
+    // ── News API (Massive) ───────────────────────────────────────────────────
 
     /**
-     * Fetch latest news headlines for a given stock ticker.
+     * Fetch latest news for a given stock ticker using the Massive News API.
+     * Maps: GET /v2/reference/news?ticker={ticker}&sort=published_utc&order=desc&limit=5
+     *
+     * The ticker filter ensures only articles related to the stock are returned.
+     * Results are sorted by published_utc descending so the freshest news comes first.
      */
     public List<NewsApiArticle> fetchHeadlines(Stock stock) {
         try {
-            NewsApiResponse response = newsWebClient.get()
+            MassiveNewsResponse response = stockWebClient.get()
                     .uri(uriBuilder -> uriBuilder
-                            .path("/everything")
-                            .queryParam("q", stock.getTicker())
-                            .queryParam("apiKey", newsApiKey)
-                            .queryParam("pageSize", "5")
-                            .queryParam("language", "pt,en")
-                            .queryParam("sortBy", "publishedAt")
+                            .path(NEWS_PATH)
+                            .queryParam("ticker", stock.getTicker().toUpperCase())
+                            .queryParam("sort",   DEFAULT_SORT)
+                            .queryParam("order",  DEFAULT_ORDER)
+                            .queryParam("limit",  NEWS_LIMIT)
                             .build())
                     .retrieve()
-                    .bodyToMono(NewsApiResponse.class)
+                    .bodyToMono(MassiveNewsResponse.class)
                     .block();
 
-            return response != null && response.articles() != null
-                    ? response.articles()
-                    : Collections.emptyList();
+            return adaptFromMassiveNews(response);
         } catch (Exception e) {
             log.warn("Erro ao buscar notícias para ticker '{}': {}", stock.getTicker(), e.getMessage());
             return Collections.emptyList();
         }
     }
 
-    // ── Adapter (external DTO → domain model) ────────────────────────────────
+    // ── Adapters (external DTO → domain model) ───────────────────────────────
 
     private List<Stock> adaptFromMassive(MassiveTickerResponse response) {
         if (response == null || response.results() == null) {
@@ -126,5 +126,33 @@ public class StockApiClient {
                         .exchange(r.primaryExchange())
                         .build())
                 .toList();
+    }
+
+    private List<NewsApiArticle> adaptFromMassiveNews(MassiveNewsResponse response) {
+        if (response == null || response.results() == null) {
+            return Collections.emptyList();
+        }
+        return response.results().stream()
+                .map(r -> new NewsApiArticle(
+                        r.title(),
+                        r.description(),
+                        r.articleUrl(),
+                        r.publishedUtc(),
+                        r.publisher() != null ? r.publisher().name() : null,
+                        r.tickers(),
+                        extractSentiment(r, stock -> null)
+                ))
+                .toList();
+    }
+
+    /**
+     * Extracts the primary sentiment from the insights list.
+     * Returns the sentiment of the first insight if available, null otherwise.
+     */
+    private String extractSentiment(MassiveNewsResponse.NewsResult result, java.util.function.Function<MassiveNewsResponse.NewsResult, String> fallback) {
+        if (result.insights() != null && !result.insights().isEmpty()) {
+            return result.insights().get(0).sentiment();
+        }
+        return fallback.apply(result);
     }
 }

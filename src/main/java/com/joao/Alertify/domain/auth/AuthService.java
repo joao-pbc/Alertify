@@ -27,6 +27,7 @@ public class AuthService {
                 .name(request.name())
                 .email(request.email())
                 .password(passwordEncoder.encode(request.password()))
+                .telegramChatId(request.telegramChatId())
                 .build();
 
         userRepository.save(user);
